@@ -64,7 +64,7 @@ function getPathFromId(id) {
 module.exports = {
   platform: "WebDAV",
   version: "1.0.0",
-  author: "MusicFree Plugin",
+  author: "异飨客",
   description: "连接 WebDAV 服务器播放音乐",
   srcUrl: "",
   cacheControl: "no-cache",
