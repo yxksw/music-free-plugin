@@ -1,6 +1,3 @@
-const { createClient } = require("webdav");
-const path = require("path");
-
 // WebDAV 配置存储
 let webdavConfig = {
   url: "",
@@ -14,6 +11,7 @@ function createWebDAVClient() {
   if (!webdavConfig.url) {
     return null;
   }
+  const { createClient } = require("webdav");
   return createClient(webdavConfig.url, {
     username: webdavConfig.username,
     password: webdavConfig.password
@@ -25,15 +23,35 @@ const AUDIO_EXTENSIONS = ['.mp3', '.flac', '.wav', '.aac', '.ogg', '.m4a', '.wma
 
 // 检查文件是否为音频文件
 function isAudioFile(filename) {
-  const ext = path.extname(filename).toLowerCase();
+  const ext = getExtension(filename).toLowerCase();
   return AUDIO_EXTENSIONS.includes(ext);
+}
+
+// 获取文件扩展名
+function getExtension(filename) {
+  const lastDot = filename.lastIndexOf('.');
+  return lastDot === -1 ? '' : filename.substring(lastDot);
+}
+
+// 获取文件名（不含扩展名）
+function getBasename(filename) {
+  const lastSlash = filename.lastIndexOf('/');
+  const name = lastSlash === -1 ? filename : filename.substring(lastSlash + 1);
+  const lastDot = name.lastIndexOf('.');
+  return lastDot === -1 ? name : name.substring(0, lastDot);
+}
+
+// 获取所在目录路径
+function getDirname(filePath) {
+  const lastSlash = filePath.lastIndexOf('/');
+  return lastSlash === -1 ? '/' : filePath.substring(0, lastSlash) || '/';
 }
 
 // 从文件名解析歌曲信息
 function parseMusicInfo(filename) {
-  const nameWithoutExt = path.basename(filename, path.extname(filename));
+  const nameWithoutExt = getBasename(filename);
   // 尝试解析 "艺术家 - 标题" 格式
-  const match = nameWithoutExt.match(/^(.+?)\s*-\s*(.+)$/);
+  const match = nameWithoutExt.match(/^(.+?)\s*[-–—]\s*(.+)$/);
   if (match) {
     return {
       artist: match[1].trim(),
@@ -49,16 +67,28 @@ function parseMusicInfo(filename) {
 
 // 生成唯一ID
 function generateId(filePath) {
-  return Buffer.from(filePath).toString('base64');
+  let result = '';
+  for (let i = 0; i < filePath.length; i++) {
+    result += filePath.charCodeAt(i).toString(36) + '-';
+  }
+  return result.slice(0, -1);
 }
 
 // 从ID解析文件路径
 function getPathFromId(id) {
-  try {
-    return Buffer.from(id, 'base64').toString('utf8');
-  } catch (e) {
-    return id;
+  const parts = id.split('-');
+  let result = '';
+  for (let i = 0; i < parts.length; i++) {
+    if (parts[i]) {
+      result += String.fromCharCode(parseInt(parts[i], 36));
+    }
   }
+  return result || id;
+}
+
+// 拼接路径
+function joinPath(...parts) {
+  return parts.map(p => p.replace(/^\/+|\/+$/g, '')).filter(p => p).join('/');
 }
 
 module.exports = {
@@ -81,7 +111,10 @@ module.exports = {
   // 初始化配置
   async init(config) {
     if (config) {
-      webdavConfig = { ...webdavConfig, ...config };
+      webdavConfig.url = config.url || webdavConfig.url;
+      webdavConfig.username = config.username || webdavConfig.username;
+      webdavConfig.password = config.password || webdavConfig.password;
+      webdavConfig.basePath = config.basePath || webdavConfig.basePath;
     }
   },
 
@@ -104,7 +137,8 @@ module.exports = {
       async function searchDirectory(dirPath) {
         const items = await client.getDirectoryContents(dirPath);
         
-        for (const item of items) {
+        for (const i = 0; i < items.length; i++) {
+          const item = items[i];
           if (item.type === "directory") {
             // 递归搜索子目录
             await searchDirectory(item.filename);
@@ -178,8 +212,14 @@ module.exports = {
       const stat = await client.stat(filePath);
       
       return {
-        ...musicItem,
-        // 可以在这里添加更多详细信息
+        id: musicItem.id,
+        platform: "WebDAV",
+        artist: musicItem.artist,
+        title: musicItem.title,
+        album: musicItem.album,
+        artwork: musicItem.artwork,
+        duration: musicItem.duration,
+        url: musicItem.url
       };
     } catch (error) {
       return musicItem;
@@ -195,11 +235,11 @@ module.exports = {
 
     try {
       const filePath = getPathFromId(musicItem.id);
-      const dirPath = path.dirname(filePath);
-      const fileName = path.basename(filePath, path.extname(filePath));
+      const dirPath = getDirname(filePath);
+      const fileName = getBasename(filePath);
       
       // 尝试查找同名的 .lrc 歌词文件
-      const lrcPath = path.join(dirPath, fileName + ".lrc");
+      const lrcPath = dirPath === '/' ? '/' + fileName + ".lrc" : dirPath + '/' + fileName + ".lrc";
       
       try {
         const lrcContent = await client.getFileContents(lrcPath, { format: "text" });
@@ -228,7 +268,8 @@ module.exports = {
       }
 
       const stat = await client.stat(filePath);
-      const musicInfo = parseMusicInfo(stat.basename || path.basename(filePath));
+      const baseName = stat.basename || filePath.substring(filePath.lastIndexOf('/') + 1);
+      const musicInfo = parseMusicInfo(baseName);
       
       return {
         id: generateId(filePath),
@@ -259,7 +300,8 @@ module.exports = {
       
       const musicList = [];
       
-      for (const item of items) {
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
         if (item.type === "file" && isAudioFile(item.basename)) {
           const musicInfo = parseMusicInfo(item.basename);
           musicList.push({
@@ -297,7 +339,8 @@ module.exports = {
       
       const musicList = [];
       
-      for (const item of items) {
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
         if (item.type === "file" && isAudioFile(item.basename)) {
           const musicInfo = parseMusicInfo(item.basename);
           musicList.push({
@@ -335,7 +378,8 @@ module.exports = {
       const items = await client.getDirectoryContents(basePath);
       
       const tags = [];
-      for (const item of items) {
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
         if (item.type === "directory") {
           tags.push({
             id: generateId(item.filename),
@@ -368,7 +412,8 @@ module.exports = {
       const items = await client.getDirectoryContents(folderPath);
       
       const sheets = [];
-      for (const item of items) {
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
         if (item.type === "directory") {
           sheets.push({
             id: generateId(item.filename),
