@@ -72,44 +72,51 @@ function fileToMusicItem(file, platform, baseUrl, basePath) {
 }
 
 // 递归获取目录下的所有音频文件
-async function getAllAudioFiles(client, dirPath, platform, baseUrl, basePath) {
+function getAllAudioFiles(client, dirPath, platform, baseUrl, basePath) {
     const results = [];
 
-    try {
-        const items = await client.getDirectoryContents(dirPath);
-
-        for (const item of items) {
+    return client.getDirectoryContents(dirPath).then(function(items) {
+        // 处理每个项目
+        const promises = items.map(function(item) {
             if (item.type === "directory") {
                 // 递归获取子目录
-                const subFiles = await getAllAudioFiles(
+                return getAllAudioFiles(
                     client,
                     item.filename,
                     platform,
                     baseUrl,
                     basePath
-                );
-                results.push(...subFiles);
+                ).then(function(subFiles) {
+                    results.push.apply(results, subFiles);
+                });
             } else if (item.type === "file") {
                 const musicItem = fileToMusicItem(item, platform, baseUrl, basePath);
                 if (musicItem) {
                     results.push(musicItem);
                 }
             }
-        }
-    } catch (error) {
-        console.error("Error reading directory " + dirPath + ":", error);
-    }
+            return Promise.resolve();
+        });
 
-    return results;
+        return Promise.all(promises);
+    }).then(function() {
+        return results;
+    }).catch(function(error) {
+        console.error("Error reading directory " + dirPath + ":", error);
+        return results;
+    });
 }
 
 module.exports = {
-    platform: "WebDAV",
-    version: "1.0.0",
+    platform: "WebDAV音源",
+    version: "1.0.1",
     author: "MusicFree Plugin",
     description: "播放WebDAV服务器上的音乐文件",
-    srcUrl: "",
+    srcUrl: "https://cdn.jsdmirror.com/gh/yxksw/music-free-plugin@main/webdav.js",
     cacheControl: "no-cache",
+
+    // 支持的搜索类型
+    supportedSearchType: ["music"],
 
     // 用户配置项
     userConfigs: [
@@ -150,13 +157,13 @@ module.exports = {
     },
 
     // 初始化函数
-    async init(config) {
+    init: function(config) {
         // 存储用户配置
         this._config = config;
     },
 
     // 获取配置
-    getConfig() {
+    getConfig: function() {
         const config = this._config || {};
         return {
             url: config.url || "",
@@ -167,98 +174,97 @@ module.exports = {
     },
 
     // 搜索功能 - 在WebDAV中搜索文件
-    async search(query, page, type) {
+    search: function(query, page, type) {
         if (type !== "music") {
-            return { isEnd: true, data: [] };
+            return Promise.resolve({ isEnd: true, data: [] });
         }
 
         const config = this.getConfig();
         if (!config.url) {
-            return { isEnd: true, data: [] };
+            return Promise.resolve({ isEnd: true, data: [] });
         }
 
-        try {
-            const client = createClient(config);
-            const allFiles = await getAllAudioFiles(
-                client,
+        const self = this;
+        return new Promise(function(resolve) {
+            getAllAudioFiles(
+                createClient(config),
                 config.basePath,
-                this.platform,
+                self.platform,
                 config.url,
                 config.basePath
-            );
-
-            // 过滤匹配搜索关键词的文件
-            const keyword = query.toLowerCase();
-            const filtered = allFiles.filter(
-                function(item) {
+            ).then(function(allFiles) {
+                // 过滤匹配搜索关键词的文件
+                const keyword = query.toLowerCase();
+                const filtered = allFiles.filter(function(item) {
                     return item.title.toLowerCase().includes(keyword) ||
                            item.artist.toLowerCase().includes(keyword);
-                }
-            );
+                });
 
-            // 分页
-            const pageSize = 20;
-            const start = (page - 1) * pageSize;
-            const end = start + pageSize;
-            const pageData = filtered.slice(start, end);
+                // 分页
+                const pageSize = 20;
+                const start = (page - 1) * pageSize;
+                const end = start + pageSize;
+                const pageData = filtered.slice(start, end);
 
-            return {
-                isEnd: end >= filtered.length,
-                data: pageData,
-            };
-        } catch (error) {
-            console.error("Search error:", error);
-            return { isEnd: true, data: [] };
-        }
+                resolve({
+                    isEnd: end >= filtered.length,
+                    data: pageData,
+                });
+            }).catch(function(error) {
+                console.error("Search error:", error);
+                resolve({ isEnd: true, data: [] });
+            });
+        });
     },
 
     // 获取音乐的真实播放URL
-    async getMediaSource(musicItem, quality) {
+    getMediaSource: function(musicItem, quality) {
         if (!musicItem._webdavUrl) {
-            return null;
+            return Promise.resolve(null);
         }
 
         // 返回WebDAV文件的直接访问URL
-        return {
+        return Promise.resolve({
             url: musicItem._webdavUrl,
-        };
+        });
     },
 
     // 获取音乐详情
-    async getMusicInfo(musicItem) {
-        return musicItem;
+    getMusicInfo: function(musicItem) {
+        return Promise.resolve(musicItem);
     },
 
     // 获取歌词 - 尝试查找同名的.lrc文件
-    async getLyric(musicItem) {
-        if (musicItem._webdavPath) {
-            try {
-                const config = this.getConfig();
-                const client = createClient(config);
-                const lrcPath = musicItem._webdavPath.replace(
-                    path.extname(musicItem._webdavPath),
-                    ".lrc"
-                );
-
-                const lrcContent = await client.getFileContents(lrcPath, {
-                    format: "text",
-                });
-
-                if (lrcContent) {
-                    return { rawLrc: lrcContent };
-                }
-            } catch (error) {
-                // 歌词文件不存在或读取失败
-            }
+    getLyric: function(musicItem) {
+        if (!musicItem._webdavPath) {
+            return Promise.resolve(null);
         }
-        return null;
+
+        const config = this.getConfig();
+        const client = createClient(config);
+        const lrcPath = musicItem._webdavPath.replace(
+            path.extname(musicItem._webdavPath),
+            ".lrc"
+        );
+
+        return client.getFileContents(lrcPath, {
+            format: "text",
+        }).then(function(lrcContent) {
+            if (lrcContent) {
+                return { rawLrc: lrcContent };
+            }
+            return null;
+        }).catch(function() {
+            // 歌词文件不存在或读取失败
+            return null;
+        });
     },
 
     // 导入歌单 - 将WebDAV目录作为歌单导入
-    async importMusicSheet(urlLike) {
+    importMusicSheet: function(urlLike) {
         const config = this.getConfig();
         if (!config.url) {
-            throw new Error("WebDAV未配置，请先在插件设置中配置WebDAV服务器地址");
+            return Promise.reject(new Error("WebDAV未配置，请先在插件设置中配置WebDAV服务器地址"));
         }
 
         // 解析输入的路径
@@ -267,11 +273,10 @@ module.exports = {
             targetPath = "/" + targetPath;
         }
 
-        try {
-            const client = createClient(config);
+        const self = this;
+        const client = createClient(config);
 
-            // 检查路径是否存在
-            const stat = await client.stat(targetPath);
+        return client.stat(targetPath).then(function(stat) {
             if (stat.type !== "directory") {
                 throw new Error("路径不是目录");
             }
@@ -280,47 +285,47 @@ module.exports = {
             const sheetName = path.basename(targetPath) || "WebDAV歌单";
 
             // 获取目录下的所有音频文件
-            const musicList = await getAllAudioFiles(
+            return getAllAudioFiles(
                 client,
                 targetPath,
-                this.platform,
+                self.platform,
                 config.url,
                 targetPath
-            );
+            ).then(function(musicList) {
+                if (musicList.length === 0) {
+                    throw new Error("目录中没有找到音频文件");
+                }
 
-            if (musicList.length === 0) {
-                throw new Error("目录中没有找到音频文件");
-            }
-
-            return {
-                id: targetPath,
-                platform: this.platform,
-                title: sheetName,
-                artist: "",
-                artwork: "",
-                description: "WebDAV目录: " + targetPath,
-                musicList: musicList,
-            };
-        } catch (error) {
+                return {
+                    id: targetPath,
+                    platform: self.platform,
+                    title: sheetName,
+                    artist: "",
+                    artwork: "",
+                    description: "WebDAV目录: " + targetPath,
+                    musicList: musicList,
+                };
+            });
+        }).catch(function(error) {
             console.error("Import sheet error:", error);
             throw error;
-        }
+        });
     },
 
     // 获取歌单详情
-    async getMusicSheetInfo(sheetItem, page) {
+    getMusicSheetInfo: function(sheetItem, page) {
         if (sheetItem.musicList) {
             const pageSize = 30;
             const start = (page - 1) * pageSize;
             const end = start + pageSize;
             const pageData = sheetItem.musicList.slice(start, end);
 
-            return {
+            return Promise.resolve({
                 isEnd: end >= sheetItem.musicList.length,
                 musicList: pageData,
                 description: sheetItem.description,
-            };
+            });
         }
-        return { isEnd: true, musicList: [] };
+        return Promise.resolve({ isEnd: true, musicList: [] });
     },
 };
