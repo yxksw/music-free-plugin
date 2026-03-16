@@ -1,0 +1,9 @@
+{
+  "plugins": [
+    {
+      "name": "WebDAV",
+      "url": "https://raw.githubusercontent.com/yxksw/Music-Free-plugin/main/webdav.js",
+      "version": "1.0.0"
+    }
+  ]
+}
