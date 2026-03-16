@@ -157,11 +157,12 @@ module.exports = {
 
     // 获取配置
     getConfig() {
+        const config = this._config || {};
         return {
-            url: this._config?.url || "",
-            username: this._config?.username || "",
-            password: this._config?.password || "",
-            basePath: this._config?.basePath || "/",
+            url: config.url || "",
+            username: config.username || "",
+            password: config.password || "",
+            basePath: config.basePath || "/",
         };
     },
 
